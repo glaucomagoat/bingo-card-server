@@ -1,57 +1,97 @@
 const Database = require('better-sqlite3');
 const path = require('path');
+const fs = require('fs');
+
+console.log('📍 Current directory:', __dirname);
+console.log('📁 Database will be created at:', path.join(__dirname, 'bingo.db'));
+
+// Ensure directory is writable
+try {
+    fs.accessSync(__dirname, fs.constants.W_OK);
+    console.log('✅ Directory is writable');
+} catch (err) {
+    console.error('❌ Directory is not writable:', err.message);
+}
 
 // Create database connection
-const db = new Database(path.join(__dirname, 'bingo.db'));
+const db = new Database(path.join(__dirname, 'bingo.db'), { verbose: console.log });
+
+console.log('✅ Database connection established');
 
 // Enable foreign keys
 db.pragma('foreign_keys = ON');
+console.log('✅ Foreign keys enabled');
 
 // Initialize database tables
 function initializeDatabase() {
-    // Users table
-    db.exec(`
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            email TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
+    console.log('🔧 Starting database initialization...');
+    
+    try {
+        // Users table
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+        console.log('✅ Users table created/verified');
 
-    // Bingo cards table
-    db.exec(`
-        CREATE TABLE IF NOT EXISTS bingo_cards (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            size INTEGER NOT NULL,
-            grid_data TEXT NOT NULL,
-            completed_data TEXT NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-        )
-    `);
+        // Bingo cards table
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS bingo_cards (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                size INTEGER NOT NULL,
+                grid_data TEXT NOT NULL,
+                completed_data TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        `);
+        console.log('✅ Bingo cards table created/verified');
 
-    // Friendships table
-    db.exec(`
-        CREATE TABLE IF NOT EXISTS friendships (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user1_id INTEGER NOT NULL,
-            user2_id INTEGER NOT NULL,
-            status TEXT NOT NULL CHECK(status IN ('pending', 'accepted')),
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user1_id) REFERENCES users(id) ON DELETE CASCADE,
-            FOREIGN KEY (user2_id) REFERENCES users(id) ON DELETE CASCADE,
-            UNIQUE(user1_id, user2_id)
-        )
-    `);
+        // Friendships table
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS friendships (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user1_id INTEGER NOT NULL,
+                user2_id INTEGER NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('pending', 'accepted')),
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user1_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (user2_id) REFERENCES users(id) ON DELETE CASCADE,
+                UNIQUE(user1_id, user2_id)
+            )
+        `);
+        console.log('✅ Friendships table created/verified');
 
-    console.log('Database initialized successfully');
+        // Verify tables exist
+        const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
+        console.log('📋 Tables in database:', tables.map(t => t.name).join(', '));
+
+        console.log('✅ Database tables initialized successfully');
+    } catch (error) {
+        console.error('❌ Error initializing database:', error);
+        throw error;
+    }
 }
 
-// User queries
+// CRITICAL: Initialize tables BEFORE creating prepared statements
+console.log('🚀 Initializing database tables...');
+try {
+    initializeDatabase();
+} catch (error) {
+    console.error('💥 FATAL: Failed to initialize database:', error);
+    process.exit(1);
+}
+
+console.log('🔧 Creating prepared statements...');
+
+// User queries - NOW create these after tables exist
 const userQueries = {
     create: db.prepare('INSERT INTO users (name, email, password) VALUES (?, ?, ?)'),
     findByEmail: db.prepare('SELECT * FROM users WHERE email = ?'),
@@ -59,6 +99,7 @@ const userQueries = {
     getAll: db.prepare('SELECT id, name, email, created_at FROM users'),
     searchByEmail: db.prepare('SELECT id, name, email FROM users WHERE email LIKE ? LIMIT 10')
 };
+console.log('✅ User queries prepared');
 
 // Bingo card queries
 const cardQueries = {
@@ -67,6 +108,7 @@ const cardQueries = {
     findByUserId: db.prepare('SELECT * FROM bingo_cards WHERE user_id = ?'),
     delete: db.prepare('DELETE FROM bingo_cards WHERE user_id = ?')
 };
+console.log('✅ Card queries prepared');
 
 // Friendship queries
 const friendshipQueries = {
@@ -102,6 +144,9 @@ const friendshipQueries = {
     findById: db.prepare('SELECT * FROM friendships WHERE id = ?'),
     delete: db.prepare('DELETE FROM friendships WHERE id = ?')
 };
+console.log('✅ Friendship queries prepared');
+
+console.log('🎉 Database module loaded successfully');
 
 module.exports = {
     db,
