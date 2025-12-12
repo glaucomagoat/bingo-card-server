@@ -11,7 +11,17 @@ const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-this-in-production';
 
 // Middleware
-app.use(cors());
+app.use(cors({
+    origin: [
+        'https://newyearbingo.netlify.app',  // Your Netlify site
+        'http://localhost:3000',
+        'http://localhost:5000',
+        'http://127.0.0.1:3000'
+    ],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json({ limit: '10mb' }));
 
 // Initialize database
