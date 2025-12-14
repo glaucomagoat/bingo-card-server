@@ -13,7 +13,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-this-in-pro
 // Middleware
 app.use(cors({
     origin: [
-        'https://newyearbingo.netlify.app',  // Your Netlify site
+        'https://newyearbingo.netlify.app', // Your Netlify site
         'http://localhost:3000',
         'http://localhost:5000',
         'http://127.0.0.1:3000'
@@ -22,6 +22,7 @@ app.use(cors({
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
 app.use(express.json({ limit: '10mb' }));
 
 // Initialize database
@@ -40,6 +41,7 @@ function authenticateToken(req, res, next) {
         if (err) {
             return res.status(403).json({ error: 'Invalid or expired token' });
         }
+
         req.user = user;
         next();
     });
@@ -125,6 +127,7 @@ app.get('/api/auth/me', authenticateToken, (req, res) => {
         if (!user) {
             return res.status(404).json({ error: 'User not found' });
         }
+
         res.json({ user });
     } catch (error) {
         console.error('Get user error:', error);
@@ -143,8 +146,10 @@ app.get('/api/users/search', authenticateToken, (req, res) => {
         }
 
         const users = userQueries.searchByEmail.all(`%${email}%`);
+
         // Filter out current user
         const filteredUsers = users.filter(u => u.id !== req.user.userId);
+
         res.json({ users: filteredUsers });
     } catch (error) {
         console.error('Search users error:', error);
@@ -156,8 +161,10 @@ app.get('/api/users/search', authenticateToken, (req, res) => {
 app.get('/api/users', authenticateToken, (req, res) => {
     try {
         const users = userQueries.getAll.all();
+
         // Filter out current user
         const filteredUsers = users.filter(u => u.id !== req.user.userId);
+
         res.json({ users: filteredUsers });
     } catch (error) {
         console.error('Get users error:', error);
@@ -201,7 +208,6 @@ app.post('/api/cards', authenticateToken, (req, res) => {
 app.get('/api/cards/me', authenticateToken, (req, res) => {
     try {
         const card = cardQueries.findByUserId.get(req.user.userId);
-        
         if (!card) {
             return res.status(404).json({ error: 'No bingo card found' });
         }
@@ -228,7 +234,8 @@ app.get('/api/cards/:userId', authenticateToken, (req, res) => {
 
         // Check if they are friends
         const friendship = friendshipQueries.checkFriendship.get(
-            req.user.userId, friendId, friendId, req.user.userId
+            req.user.userId, friendId,
+            friendId, req.user.userId
         );
 
         if (!friendship || friendship.status !== 'accepted') {
@@ -236,7 +243,6 @@ app.get('/api/cards/:userId', authenticateToken, (req, res) => {
         }
 
         const card = cardQueries.findByUserId.get(friendId);
-        
         if (!card) {
             return res.status(404).json({ error: 'Friend has no bingo card' });
         }
@@ -290,7 +296,8 @@ app.post('/api/friends/request', authenticateToken, (req, res) => {
 
         // Check if friendship already exists
         const existing = friendshipQueries.checkFriendship.get(
-            req.user.userId, friend.id, friend.id, req.user.userId
+            req.user.userId, friend.id,
+            friend.id, req.user.userId
         );
 
         if (existing) {
@@ -352,8 +359,12 @@ app.post('/api/friends/accept/:requestId', authenticateToken, (req, res) => {
 app.get('/api/friends', authenticateToken, (req, res) => {
     try {
         const friends = friendshipQueries.getFriends.all(
-            req.user.userId, req.user.userId, req.user.userId, req.user.userId
+            req.user.userId,
+            req.user.userId,
+            req.user.userId,
+            req.user.userId
         );
+
         res.json({ friends });
     } catch (error) {
         console.error('Get friends error:', error);
@@ -365,7 +376,7 @@ app.get('/api/friends', authenticateToken, (req, res) => {
 app.delete('/api/friends/:friendshipId', authenticateToken, (req, res) => {
     try {
         const friendshipId = parseInt(req.params.friendshipId);
-        
+
         // Verify friendship exists and user is part of it
         const friendship = friendshipQueries.findById.get(friendshipId);
         if (!friendship) {
@@ -377,13 +388,13 @@ app.delete('/api/friends/:friendshipId', authenticateToken, (req, res) => {
         }
 
         friendshipQueries.delete.run(friendshipId);
+
         res.json({ message: 'Friendship deleted' });
     } catch (error) {
         console.error('Delete friendship error:', error);
         res.status(500).json({ error: 'Failed to delete friendship' });
     }
 });
-
 
 // ============= COMMENT ROUTES =============
 
@@ -401,11 +412,12 @@ app.post('/api/comments', authenticateToken, async (req, res) => {
 
         // Check if they are friends
         const friendship = friendshipQueries.checkFriendship.get(
-            authorId, targetId, targetId, authorId
+            authorId, targetId,
+            targetId, authorId
         );
 
         if (!friendship || friendship.status !== 'accepted') {
-            return res.status(403).json({ error: 'You can only comment on friends' cards' });
+            return res.status(403).json({ error: "You can only comment on friends' cards" });
         }
 
         // Create comment
@@ -418,7 +430,7 @@ app.post('/api/comments', authenticateToken, async (req, res) => {
             isPrivate ? 1 : 0
         );
 
-        res.status(201).json({ 
+        res.status(201).json({
             message: 'Comment added successfully',
             commentId: result.lastInsertRowid
         });
@@ -473,6 +485,7 @@ app.delete('/api/comments/:commentId', authenticateToken, (req, res) => {
         }
 
         commentQueries.delete.run(commentId);
+
         res.json({ message: 'Comment deleted successfully' });
     } catch (error) {
         console.error('Delete comment error:', error);
