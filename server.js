@@ -399,46 +399,59 @@ app.delete('/api/friends/:friendshipId', authenticateToken, (req, res) => {
 // ============= COMMENT ROUTES =============
 
 // Create a comment on a friend's card
-app.post('/api/comments', authenticateToken, async (req, res) => {
-    try {
-        const { targetUserId, row, col, text, isPrivate } = req.body;
+app.post('/api/comments', authenticateToken, (req, res) => {
+  try {
+    const { targetUserId, row, col, text, isPrivate } = req.body;
 
-        if (!targetUserId || row === undefined || col === undefined || !text) {
-            return res.status(400).json({ error: 'targetUserId, row, col, and text are required' });
-        }
-
-        const authorId = req.user.userId;
-        const targetId = parseInt(targetUserId);
-
-        // Check if they are friends
-        const friendship = friendshipQueries.checkFriendship.get(
-            authorId, targetId,
-            targetId, authorId
-        );
-
-        if (!friendship || friendship.status !== 'accepted') {
-            return res.status(403).json({ error: "You can only comment on friends' cards" });
-        }
-
-        // Create comment
-        const result = commentQueries.create.run(
-            authorId,
-            targetId,
-            row,
-            col,
-            text,
-            isPrivate ? 1 : 0
-        );
-
-        res.status(201).json({
-            message: 'Comment added successfully',
-            commentId: result.lastInsertRowid
-        });
-    } catch (error) {
-        console.error('Create comment error:', error);
-        res.status(500).json({ error: 'Failed to create comment' });
+    if (!targetUserId || row === undefined || col === undefined || !text) {
+      return res.status(400).json({ error: 'targetUserId, row, col, and text are required' });
     }
+
+    const authorId = req.user.userId;
+    const targetId = Number(targetUserId);
+    const rowNum = Number(row);
+    const colNum = Number(col);
+
+    if (Number.isNaN(targetId) || Number.isNaN(rowNum) || Number.isNaN(colNum)) {
+      return res.status(400).json({ error: 'targetUserId, row, and col must be numbers' });
+    }
+
+    // Check if they are friends
+    const friendship = friendshipQueries.checkFriendship.get(
+      authorId, targetId,
+      targetId, authorId
+    );
+
+    if (!friendship || friendship.status !== 'accepted') {
+      return res.status(403).json({ error: "You can only comment on friends' cards" });
+    }
+
+    let result;
+    try {
+      // Create comment
+      result = commentQueries.create.run(
+        authorId,
+        targetId,
+        rowNum,
+        colNum,
+        text,
+        isPrivate ? 1 : 0
+      );
+    } catch (dbError) {
+      console.error('DB create comment error:', dbError);
+      return res.status(500).json({ error: 'Database error while creating comment' });
+    }
+
+    res.status(201).json({
+      message: 'Comment added successfully',
+      commentId: result.lastInsertRowid
+    });
+  } catch (error) {
+    console.error('Create comment error:', error);
+    res.status(500).json({ error: 'Failed to create comment' });
+  }
 });
+
 
 // Get comments for a user's card
 app.get('/api/comments/:userId', authenticateToken, (req, res) => {
