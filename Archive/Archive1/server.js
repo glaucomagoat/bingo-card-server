@@ -4,7 +4,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
-const { initializeDatabase, userQueries, cardQueries, friendshipQueries, commentQueries } = require('./database');
+const { initializeDatabase, userQueries, cardQueries, friendshipQueries } = require('./database');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -371,135 +371,6 @@ app.delete('/api/friends/:friendshipId', authenticateToken, (req, res) => {
     } catch (error) {
         console.error('Delete friendship error:', error);
         res.status(500).json({ error: 'Failed to delete friendship' });
-    }
-});
-
-// ============= COMMENT ROUTES =============
-
-// Create a comment
-app.post('/api/comments', authenticateToken, (req, res) => {
-    try {
-        const { cardOwnerId, row, col, text, isPrivate } = req.body;
-
-        if (cardOwnerId === undefined || row === undefined || col === undefined || !text) {
-            return res.status(400).json({ error: 'Card owner ID, row, col, and text are required' });
-        }
-
-        // If commenting on someone else's card, verify friendship
-        if (cardOwnerId !== req.user.userId) {
-            const friendship = friendshipQueries.checkFriendship.get(
-                req.user.userId, cardOwnerId, cardOwnerId, req.user.userId
-            );
-
-            if (!friendship || friendship.status !== 'accepted') {
-                return res.status(403).json({ error: 'You can only comment on friends\' cards' });
-            }
-        }
-
-        // Create comment
-        commentQueries.create.run(
-            req.user.userId,
-            cardOwnerId,
-            row,
-            col,
-            text,
-            isPrivate ? 1 : 0
-        );
-
-        res.status(201).json({ message: 'Comment added successfully' });
-    } catch (error) {
-        console.error('Create comment error:', error);
-        res.status(500).json({ error: 'Failed to create comment' });
-    }
-});
-
-// Get comments for a specific task
-app.get('/api/comments/:cardOwnerId/:row/:col', authenticateToken, (req, res) => {
-    try {
-        const cardOwnerId = parseInt(req.params.cardOwnerId);
-        const row = parseInt(req.params.row);
-        const col = parseInt(req.params.col);
-
-        // If viewing someone else's card, verify friendship
-        if (cardOwnerId !== req.user.userId) {
-            const friendship = friendshipQueries.checkFriendship.get(
-                req.user.userId, cardOwnerId, cardOwnerId, req.user.userId
-            );
-
-            if (!friendship || friendship.status !== 'accepted') {
-                return res.status(403).json({ error: 'You can only view comments on friends\' cards' });
-            }
-        }
-
-        const comments = commentQueries.getByTask.all(cardOwnerId, row, col);
-
-        // Filter private comments
-        const filteredComments = comments.filter(comment => {
-            // Show all comments if viewing own card
-            if (cardOwnerId === req.user.userId) {
-                return true;
-            }
-            // Show public comments and private comments authored by current user
-            return !comment.is_private || comment.author_id === req.user.userId;
-        });
-
-        res.json({ comments: filteredComments });
-    } catch (error) {
-        console.error('Get comments error:', error);
-        res.status(500).json({ error: 'Failed to get comments' });
-    }
-});
-
-// Get all comments for a card
-app.get('/api/comments/:cardOwnerId', authenticateToken, (req, res) => {
-    try {
-        const cardOwnerId = parseInt(req.params.cardOwnerId);
-
-        // If viewing someone else's card, verify friendship
-        if (cardOwnerId !== req.user.userId) {
-            const friendship = friendshipQueries.checkFriendship.get(
-                req.user.userId, cardOwnerId, cardOwnerId, req.user.userId
-            );
-
-            if (!friendship || friendship.status !== 'accepted') {
-                return res.status(403).json({ error: 'You can only view comments on friends\' cards' });
-            }
-        }
-
-        const comments = commentQueries.getByCard.all(cardOwnerId);
-
-        // Filter private comments
-        const filteredComments = comments.filter(comment => {
-            // Show all comments if viewing own card
-            if (cardOwnerId === req.user.userId) {
-                return true;
-            }
-            // Show public comments and private comments authored by current user
-            return !comment.is_private || comment.author_id === req.user.userId;
-        });
-
-        res.json({ comments: filteredComments });
-    } catch (error) {
-        console.error('Get comments error:', error);
-        res.status(500).json({ error: 'Failed to get comments' });
-    }
-});
-
-// Delete a comment (only your own)
-app.delete('/api/comments/:commentId', authenticateToken, (req, res) => {
-    try {
-        const commentId = parseInt(req.params.commentId);
-
-        const result = commentQueries.delete.run(commentId, req.user.userId);
-
-        if (result.changes === 0) {
-            return res.status(404).json({ error: 'Comment not found or unauthorized' });
-        }
-
-        res.json({ message: 'Comment deleted successfully' });
-    } catch (error) {
-        console.error('Delete comment error:', error);
-        res.status(500).json({ error: 'Failed to delete comment' });
     }
 });
 
