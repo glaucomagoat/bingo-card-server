@@ -4,7 +4,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
-const { initializeDatabase, userQueries, cardQueries, friendshipQueries, commentQueries } = require('./database');
+const { initializeDatabase, userQueries, cardQueries, friendshipQueries } = require('./database');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -381,102 +381,6 @@ app.delete('/api/friends/:friendshipId', authenticateToken, (req, res) => {
     } catch (error) {
         console.error('Delete friendship error:', error);
         res.status(500).json({ error: 'Failed to delete friendship' });
-    }
-});
-
-
-// ============= COMMENT ROUTES =============
-
-// Create a comment on a friend's card
-app.post('/api/comments', authenticateToken, async (req, res) => {
-    try {
-        const { targetUserId, row, col, text, isPrivate } = req.body;
-
-        if (!targetUserId || row === undefined || col === undefined || !text) {
-            return res.status(400).json({ error: 'targetUserId, row, col, and text are required' });
-        }
-
-        const authorId = req.user.userId;
-        const targetId = parseInt(targetUserId);
-
-        // Check if they are friends
-        const friendship = friendshipQueries.checkFriendship.get(
-            authorId, targetId, targetId, authorId
-        );
-
-        if (!friendship || friendship.status !== 'accepted') {
-            return res.status(403).json({ error: 'You can only comment on friends' cards' });
-        }
-
-        // Create comment
-        const result = commentQueries.create.run(
-            authorId,
-            targetId,
-            row,
-            col,
-            text,
-            isPrivate ? 1 : 0
-        );
-
-        res.status(201).json({ 
-            message: 'Comment added successfully',
-            commentId: result.lastInsertRowid
-        });
-    } catch (error) {
-        console.error('Create comment error:', error);
-        res.status(500).json({ error: 'Failed to create comment' });
-    }
-});
-
-// Get comments for a user's card
-app.get('/api/comments/:userId', authenticateToken, (req, res) => {
-    try {
-        const targetUserId = parseInt(req.params.userId);
-        const requesterId = req.user.userId;
-
-        // Get all comments for this user
-        const allComments = commentQueries.findByTargetUser.all(targetUserId);
-
-        // Filter based on privacy:
-        // - Show all public comments
-        // - Show private comments only if requester is author or target
-        const filteredComments = allComments.filter(comment => {
-            if (!comment.is_private) {
-                return true; // Public comments visible to all friends
-            }
-            // Private comments only visible to author and target
-            return comment.author_id === requesterId || comment.target_user_id === requesterId;
-        });
-
-        res.json(filteredComments);
-    } catch (error) {
-        console.error('Get comments error:', error);
-        res.status(500).json({ error: 'Failed to get comments' });
-    }
-});
-
-// Delete a comment (only by author)
-app.delete('/api/comments/:commentId', authenticateToken, (req, res) => {
-    try {
-        const commentId = parseInt(req.params.commentId);
-
-        // Get comment to verify ownership
-        const comment = commentQueries.findById.get(commentId);
-
-        if (!comment) {
-            return res.status(404).json({ error: 'Comment not found' });
-        }
-
-        // Only author can delete
-        if (comment.author_id !== req.user.userId) {
-            return res.status(403).json({ error: 'You can only delete your own comments' });
-        }
-
-        commentQueries.delete.run(commentId);
-        res.json({ message: 'Comment deleted successfully' });
-    } catch (error) {
-        console.error('Delete comment error:', error);
-        res.status(500).json({ error: 'Failed to delete comment' });
     }
 });
 

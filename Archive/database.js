@@ -69,24 +69,6 @@ function initializeDatabase() {
         `);
         console.log('✅ Friendships table created/verified');
 
-    // Comments table
-    db.exec(`
-        CREATE TABLE IF NOT EXISTS comments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            author_id INTEGER NOT NULL,
-            target_user_id INTEGER NOT NULL,
-            row INTEGER NOT NULL,
-            col INTEGER NOT NULL,
-            text TEXT NOT NULL,
-            is_private BOOLEAN NOT NULL DEFAULT 0,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE,
-            FOREIGN KEY (target_user_id) REFERENCES users(id) ON DELETE CASCADE
-        )
-    `);
-    console.log('✅ Comments table created/verified');
-
-
         // Verify tables exist
         const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
         console.log('📋 Tables in database:', tables.map(t => t.name).join(', '));
@@ -164,22 +146,6 @@ const friendshipQueries = {
 };
 console.log('✅ Friendship queries prepared');
 
-// Comment queries
-const commentQueries = {
-    create: db.prepare('INSERT INTO comments (author_id, target_user_id, row, col, text, is_private) VALUES (?, ?, ?, ?, ?, ?)'),
-    findByTargetUser: db.prepare(`
-        SELECT c.*, u.name as author_name, u.email as author_email
-        FROM comments c
-        JOIN users u ON c.author_id = u.id
-        WHERE c.target_user_id = ?
-        ORDER BY c.created_at DESC
-    `),
-    findById: db.prepare('SELECT * FROM comments WHERE id = ?'),
-    delete: db.prepare('DELETE FROM comments WHERE id = ?')
-};
-console.log('✅ Comment queries prepared');
-
-
 console.log('🎉 Database module loaded successfully');
 
 module.exports = {
@@ -187,6 +153,5 @@ module.exports = {
     initializeDatabase,
     userQueries,
     cardQueries,
-    friendshipQueries,
-    commentQueries
+    friendshipQueries
 };
