@@ -40,7 +40,7 @@ function authenticateToken(req, res, next) {
 // Register
 app.post('/api/auth/register', async (req, res) => {
     try {
-        const { name, email, password } = req.body;
+        const { name, username, email, password } = req.body;
 
         if (!name || !email || !password) {
             return res.status(400).json({ error: 'Name, email, and password are required' });
@@ -52,11 +52,21 @@ app.post('/api/auth/register', async (req, res) => {
             return res.status(409).json({ error: 'User already exists with this email' });
         }
 
+        // Check if username exists (if provided)
+        if (username) {
+            const existingUsername = userQueries.findByUsername ? userQueries.findByUsername.get(username) : null;
+            if (existingUsername) {
+                return res.status(409).json({ error: 'Username already taken' });
+            }
+        }
+
         // Hash password
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        // Create user
-        const result = userQueries.create.run(name, email, hashedPassword);
+        // Create user (with or without username)
+        const result = username 
+            ? userQueries.createWithUsername.run(name, username, email, hashedPassword)
+            : userQueries.create.run(name, email, hashedPassword);
         const userId = result.lastInsertRowid;
 
         // Generate token
@@ -65,7 +75,7 @@ app.post('/api/auth/register', async (req, res) => {
         res.status(201).json({
             message: 'User created successfully',
             token,
-            user: { id: userId, name, email }
+            user: { id: userId, name, username: username || null, email }
         });
     } catch (error) {
         console.error('Register error:', error);
@@ -100,7 +110,7 @@ app.post('/api/auth/login', async (req, res) => {
         res.json({
             message: 'Login successful',
             token,
-            user: { id: user.id, name: user.name, email: user.email }
+            user: { id: user.id, name: user.name, username: user.username || null, email: user.email }
         });
     } catch (error) {
         console.error('Login error:', error);
@@ -119,6 +129,65 @@ app.get('/api/auth/me', authenticateToken, (req, res) => {
     } catch (error) {
         console.error('Get user error:', error);
         res.status(500).json({ error: 'Failed to get user' });
+    }
+});
+
+// ✅ NEW: Update user profile
+app.put('/api/auth/profile', authenticateToken, async (req, res) => {
+    try {
+        const { name, username, email, password } = req.body;
+        const userId = req.user.userId;
+
+        if (!name || !email) {
+            return res.status(400).json({ error: 'Name and email are required' });
+        }
+
+        // Check if username is taken by another user
+        if (username) {
+            const existingUsername = userQueries.findByUsername ? userQueries.findByUsername.get(username) : null;
+            if (existingUsername && existingUsername.id !== userId) {
+                return res.status(409).json({ error: 'Username already taken' });
+            }
+        }
+
+        // Check if email is taken by another user
+        const existingEmail = userQueries.findByEmail.get(email);
+        if (existingEmail && existingEmail.id !== userId) {
+            return res.status(409).json({ error: 'Email already taken' });
+        }
+
+        // Update user with or without password
+        if (password) {
+            const hashedPassword = await bcrypt.hash(password, 10);
+            if (userQueries.updateWithPassword) {
+                userQueries.updateWithPassword.run(name, username || null, email, hashedPassword, userId);
+            } else {
+                // Fallback if query doesn't exist
+                userQueries.update.run(name, email, userId);
+            }
+        } else {
+            if (userQueries.updateProfile) {
+                userQueries.updateProfile.run(name, username || null, email, userId);
+            } else {
+                userQueries.update.run(name, email, userId);
+            }
+        }
+
+        // Get updated user
+        const updatedUser = userQueries.findById.get(userId);
+        
+        res.json({ 
+            message: 'Profile updated successfully',
+            user: {
+                id: updatedUser.id,
+                name: updatedUser.name,
+                username: updatedUser.username || null,
+                email: updatedUser.email
+            }
+        });
+    } catch (error) {
+        console.error('Profile update error:', error);
+        res.status(500).json({ error: 'Failed to update profile' });
     }
 });
 
@@ -211,6 +280,26 @@ app.get('/api/cards/me', authenticateToken, (req, res) => {
     }
 });
 
+// ✅ NEW: Clear all comments for user's card (when creating new card)
+app.delete('/api/cards/clear', authenticateToken, (req, res) => {
+    try {
+        const userId = req.user.userId;
+        
+        // Delete all comments where this user is the card owner
+        const result = commentQueries.deleteByCardOwner 
+            ? commentQueries.deleteByCardOwner.run(userId)
+            : { changes: 0 };
+
+        res.json({ 
+            message: 'All comments cleared successfully',
+            deletedCount: result.changes || 0
+        });
+    } catch (error) {
+        console.error('Clear comments error:', error);
+        res.status(500).json({ error: 'Failed to clear comments' });
+    }
+});
+
 // Get friend's bingo card
 app.get('/api/cards/:userId', authenticateToken, (req, res) => {
     try {
@@ -242,18 +331,7 @@ app.get('/api/cards/:userId', authenticateToken, (req, res) => {
         });
     } catch (error) {
         console.error('Get friend card error:', error);
-        res.status(500).json({ error: 'Failed to get friend bingo card' });
-    }
-});
-
-// Delete bingo card
-app.delete('/api/cards', authenticateToken, (req, res) => {
-    try {
-        cardQueries.delete.run(req.user.userId);
-        res.json({ message: 'Bingo card deleted successfully' });
-    } catch (error) {
-        console.error('Delete card error:', error);
-        res.status(500).json({ error: 'Failed to delete bingo card' });
+        res.status(500).json({ error: 'Failed to get bingo card' });
     }
 });
 
@@ -262,16 +340,22 @@ app.delete('/api/cards', authenticateToken, (req, res) => {
 // Send friend request
 app.post('/api/friends/request', authenticateToken, (req, res) => {
     try {
-        const { friendEmail } = req.body;
+        const { friendEmail, friendUsername } = req.body;
 
-        if (!friendEmail) {
-            return res.status(400).json({ error: 'Friend email is required' });
+        if (!friendEmail && !friendUsername) {
+            return res.status(400).json({ error: 'Friend email or username required' });
         }
 
-        // Find friend
-        const friend = userQueries.findByEmail.get(friendEmail);
+        // Find friend by email or username
+        let friend;
+        if (friendUsername && userQueries.findByUsername) {
+            friend = userQueries.findByUsername.get(friendUsername);
+        } else if (friendEmail) {
+            friend = userQueries.findByEmail.get(friendEmail);
+        }
+
         if (!friend) {
-            return res.status(404).json({ error: 'User not found with this email' });
+            return res.status(404).json({ error: 'User not found' });
         }
 
         if (friend.id === req.user.userId) {

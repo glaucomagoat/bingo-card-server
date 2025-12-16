@@ -2,7 +2,7 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 
-console.log('📍 Current directory:', __dirname);
+console.log('📁 Current directory:', __dirname);
 console.log('📁 Database will be created at:', path.join(__dirname, 'bingo.db'));
 
 // Ensure directory is writable
@@ -38,6 +38,19 @@ function initializeDatabase() {
             )
         `);
         console.log('✅ Users table created/verified');
+
+        // ✅ NEW: Add username column if it doesn't exist
+        try {
+            db.exec(`ALTER TABLE users ADD COLUMN username TEXT UNIQUE`);
+            console.log('✅ Username column added to users table');
+        } catch (error) {
+            // Column might already exist, that's fine
+            if (error.message.includes('duplicate column')) {
+                console.log('ℹ️  Username column already exists');
+            } else {
+                console.log('ℹ️  Username column check:', error.message);
+            }
+        }
 
         // Bingo cards table
         db.exec(`
@@ -112,9 +125,15 @@ console.log('🔧 Creating prepared statements...');
 const userQueries = {
     create: db.prepare('INSERT INTO users (name, email, password) VALUES (?, ?, ?)'),
     findByEmail: db.prepare('SELECT * FROM users WHERE email = ?'),
-    findById: db.prepare('SELECT id, name, email, created_at FROM users WHERE id = ?'),
-    getAll: db.prepare('SELECT id, name, email, created_at FROM users'),
-    searchByEmail: db.prepare('SELECT id, name, email FROM users WHERE email LIKE ? LIMIT 10')
+    findById: db.prepare('SELECT id, name, username, email, created_at FROM users WHERE id = ?'),
+    getAll: db.prepare('SELECT id, name, username, email, created_at FROM users'),
+    searchByEmail: db.prepare('SELECT id, name, username, email FROM users WHERE email LIKE ? LIMIT 10'),
+    
+    // ✅ NEW: Username support queries
+    findByUsername: db.prepare('SELECT * FROM users WHERE username = ?'),
+    createWithUsername: db.prepare('INSERT INTO users (name, username, email, password) VALUES (?, ?, ?, ?)'),
+    updateProfile: db.prepare('UPDATE users SET name = ?, username = ?, email = ? WHERE id = ?'),
+    updateWithPassword: db.prepare('UPDATE users SET name = ?, username = ?, email = ?, password = ? WHERE id = ?')
 };
 console.log('✅ User queries prepared');
 
@@ -180,7 +199,10 @@ const commentQueries = {
         WHERE c.card_owner_id = ? AND c.row = ? AND c.col = ?
         ORDER BY c.created_at DESC
     `),
-    delete: db.prepare('DELETE FROM comments WHERE id = ? AND author_id = ?')
+    delete: db.prepare('DELETE FROM comments WHERE id = ? AND author_id = ?'),
+    
+    // ✅ NEW: Delete all comments by card owner (for clearing when creating new card)
+    deleteByCardOwner: db.prepare('DELETE FROM comments WHERE card_owner_id = ?')
 };
 console.log('✅ Comment queries prepared');
 
