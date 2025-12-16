@@ -103,6 +103,21 @@ function initializeDatabase() {
         `);
         console.log('✅ Comments table created/verified');
 
+        // Reactions table
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS reactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                comment_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                emoji TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (comment_id) REFERENCES comments(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                UNIQUE(comment_id, user_id, emoji)
+            )
+        `);
+        console.log('✅ Reactions table created/verified');
+
         // Verify tables exist
         const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
         console.log('📋 Tables in database:', tables.map(t => t.name).join(', '));
@@ -227,6 +242,28 @@ const commentQueries = {
 };
 console.log('✅ Comment queries prepared');
 
+// Reaction queries
+const reactionQueries = {
+    create: db.prepare('INSERT INTO reactions (comment_id, user_id, emoji) VALUES (?, ?, ?)'),
+    delete: db.prepare('DELETE FROM reactions WHERE comment_id = ? AND user_id = ? AND emoji = ?'),
+    getByComment: db.prepare(`
+        SELECT r.*, u.name as user_name
+        FROM reactions r
+        JOIN users u ON r.user_id = u.id
+        WHERE r.comment_id = ?
+        ORDER BY r.created_at ASC
+    `),
+    getByCard: db.prepare(`
+        SELECT r.*, u.name as user_name, c.row, c.col
+        FROM reactions r
+        JOIN users u ON r.user_id = u.id
+        JOIN comments c ON r.comment_id = c.id
+        WHERE c.card_owner_id = ?
+        ORDER BY r.created_at DESC
+    `)
+};
+console.log('✅ Reaction queries prepared');
+
 console.log('🎉 Database module loaded successfully');
 
 module.exports = {
@@ -235,5 +272,6 @@ module.exports = {
     userQueries,
     cardQueries,
     friendshipQueries,
-    commentQueries
+    commentQueries,
+    reactionQueries
 };

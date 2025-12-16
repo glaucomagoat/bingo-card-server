@@ -4,7 +4,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
-const { initializeDatabase, userQueries, cardQueries, friendshipQueries, commentQueries } = require('./database');
+const { initializeDatabase, userQueries, cardQueries, friendshipQueries, commentQueries, reactionQueries } = require('./database');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -595,6 +595,77 @@ app.delete('/api/comments/:commentId', authenticateToken, (req, res) => {
     } catch (error) {
         console.error('Delete comment error:', error);
         res.status(500).json({ error: 'Failed to delete comment' });
+    }
+});
+
+// ============= REACTION ROUTES =============
+
+// Add reaction to a comment
+app.post('/api/reactions', authenticateToken, (req, res) => {
+    try {
+        const { commentId, emoji } = req.body;
+
+        if (!commentId || !emoji) {
+            return res.status(400).json({ error: 'Comment ID and emoji are required' });
+        }
+
+        // Check if reaction already exists
+        try {
+            reactionQueries.create.run(commentId, req.user.userId, emoji);
+            res.status(201).json({ message: 'Reaction added successfully' });
+        } catch (error) {
+            if (error.message.includes('UNIQUE constraint')) {
+                return res.status(409).json({ error: 'You already reacted with this emoji' });
+            }
+            throw error;
+        }
+    } catch (error) {
+        console.error('Add reaction error:', error);
+        res.status(500).json({ error: 'Failed to add reaction' });
+    }
+});
+
+// Remove reaction from a comment
+app.delete('/api/reactions', authenticateToken, (req, res) => {
+    try {
+        const { commentId, emoji } = req.body;
+
+        if (!commentId || !emoji) {
+            return res.status(400).json({ error: 'Comment ID and emoji are required' });
+        }
+
+        const result = reactionQueries.delete.run(commentId, req.user.userId, emoji);
+
+        if (result.changes === 0) {
+            return res.status(404).json({ error: 'Reaction not found' });
+        }
+
+        res.json({ message: 'Reaction removed successfully' });
+    } catch (error) {
+        console.error('Remove reaction error:', error);
+        res.status(500).json({ error: 'Failed to remove reaction' });
+    }
+});
+
+// Get reactions for a comment
+app.get('/api/reactions/:commentId', authenticateToken, (req, res) => {
+    try {
+        const commentId = parseInt(req.params.commentId);
+        const reactions = reactionQueries.getByComment.all(commentId);
+
+        // Group reactions by emoji
+        const grouped = {};
+        reactions.forEach(reaction => {
+            if (!grouped[reaction.emoji]) {
+                grouped[reaction.emoji] = [];
+            }
+            grouped[reaction.emoji].push(reaction.user_name);
+        });
+
+        res.json({ reactions: grouped });
+    } catch (error) {
+        console.error('Get reactions error:', error);
+        res.status(500).json({ error: 'Failed to get reactions' });
     }
 });
 
