@@ -39,17 +39,21 @@ function initializeDatabase() {
         `);
         console.log('✅ Users table created/verified');
 
-        // ✅ NEW: Add username column if it doesn't exist
+        // Add username column if it doesn't exist - with better error handling
         try {
-            db.exec(`ALTER TABLE users ADD COLUMN username TEXT UNIQUE`);
-            console.log('✅ Username column added to users table');
-        } catch (error) {
-            // Column might already exist, that's fine
-            if (error.message.includes('duplicate column')) {
-                console.log('ℹ️  Username column already exists');
+            // Check if column exists first
+            const columns = db.pragma('table_info(users)');
+            const hasUsername = columns.some(col => col.name === 'username');
+            
+            if (!hasUsername) {
+                db.exec(`ALTER TABLE users ADD COLUMN username TEXT`);
+                console.log('✅ Username column added to users table');
             } else {
-                console.log('ℹ️  Username column check:', error.message);
+                console.log('ℹ️  Username column already exists');
             }
+        } catch (error) {
+            console.error('⚠️  Error checking/adding username column:', error.message);
+            // Don't crash - continue without username column
         }
 
         // Bingo cards table
@@ -121,20 +125,39 @@ try {
 
 console.log('🔧 Creating prepared statements...');
 
-// User queries - NOW create these after tables exist
+// Check if username column exists for prepared statements
+let hasUsernameColumn = false;
+try {
+    const columns = db.pragma('table_info(users)');
+    hasUsernameColumn = columns.some(col => col.name === 'username');
+    console.log('ℹ️  Username column available:', hasUsernameColumn);
+} catch (error) {
+    console.error('⚠️  Could not check username column:', error.message);
+}
+
+// User queries - create based on whether username column exists
 const userQueries = {
     create: db.prepare('INSERT INTO users (name, email, password) VALUES (?, ?, ?)'),
     findByEmail: db.prepare('SELECT * FROM users WHERE email = ?'),
-    findById: db.prepare('SELECT id, name, username, email, created_at FROM users WHERE id = ?'),
-    getAll: db.prepare('SELECT id, name, username, email, created_at FROM users'),
-    searchByEmail: db.prepare('SELECT id, name, username, email FROM users WHERE email LIKE ? LIMIT 10'),
-    
-    // ✅ NEW: Username support queries
-    findByUsername: db.prepare('SELECT * FROM users WHERE username = ?'),
-    createWithUsername: db.prepare('INSERT INTO users (name, username, email, password) VALUES (?, ?, ?, ?)'),
-    updateProfile: db.prepare('UPDATE users SET name = ?, username = ?, email = ? WHERE id = ?'),
-    updateWithPassword: db.prepare('UPDATE users SET name = ?, username = ?, email = ?, password = ? WHERE id = ?')
+    findById: hasUsernameColumn 
+        ? db.prepare('SELECT id, name, username, email, created_at FROM users WHERE id = ?')
+        : db.prepare('SELECT id, name, email, created_at FROM users WHERE id = ?'),
+    getAll: hasUsernameColumn
+        ? db.prepare('SELECT id, name, username, email, created_at FROM users')
+        : db.prepare('SELECT id, name, email, created_at FROM users'),
+    searchByEmail: hasUsernameColumn
+        ? db.prepare('SELECT id, name, username, email FROM users WHERE email LIKE ? LIMIT 10')
+        : db.prepare('SELECT id, name, email FROM users WHERE email LIKE ? LIMIT 10')
 };
+
+// Add username-specific queries only if column exists
+if (hasUsernameColumn) {
+    userQueries.findByUsername = db.prepare('SELECT * FROM users WHERE username = ?');
+    userQueries.createWithUsername = db.prepare('INSERT INTO users (name, username, email, password) VALUES (?, ?, ?, ?)');
+    userQueries.updateProfile = db.prepare('UPDATE users SET name = ?, username = ?, email = ? WHERE id = ?');
+    userQueries.updateWithPassword = db.prepare('UPDATE users SET name = ?, username = ?, email = ?, password = ? WHERE id = ?');
+}
+
 console.log('✅ User queries prepared');
 
 // Bingo card queries
@@ -200,8 +223,6 @@ const commentQueries = {
         ORDER BY c.created_at DESC
     `),
     delete: db.prepare('DELETE FROM comments WHERE id = ? AND author_id = ?'),
-    
-    // ✅ NEW: Delete all comments by card owner (for clearing when creating new card)
     deleteByCardOwner: db.prepare('DELETE FROM comments WHERE card_owner_id = ?')
 };
 console.log('✅ Comment queries prepared');

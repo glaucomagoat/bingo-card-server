@@ -52,9 +52,9 @@ app.post('/api/auth/register', async (req, res) => {
             return res.status(409).json({ error: 'User already exists with this email' });
         }
 
-        // Check if username exists (if provided)
-        if (username) {
-            const existingUsername = userQueries.findByUsername ? userQueries.findByUsername.get(username) : null;
+        // Check if username exists (if provided and query available)
+        if (username && userQueries.findByUsername) {
+            const existingUsername = userQueries.findByUsername.get(username);
             if (existingUsername) {
                 return res.status(409).json({ error: 'Username already taken' });
             }
@@ -63,10 +63,13 @@ app.post('/api/auth/register', async (req, res) => {
         // Hash password
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        // Create user (with or without username)
-        const result = username 
-            ? userQueries.createWithUsername.run(name, username, email, hashedPassword)
-            : userQueries.create.run(name, email, hashedPassword);
+        // Create user (with username only if query is available)
+        let result;
+        if (username && userQueries.createWithUsername) {
+            result = userQueries.createWithUsername.run(name, username, email, hashedPassword);
+        } else {
+            result = userQueries.create.run(name, email, hashedPassword);
+        }
         const userId = result.lastInsertRowid;
 
         // Generate token
@@ -110,7 +113,12 @@ app.post('/api/auth/login', async (req, res) => {
         res.json({
             message: 'Login successful',
             token,
-            user: { id: user.id, name: user.name, username: user.username || null, email: user.email }
+            user: { 
+                id: user.id, 
+                name: user.name, 
+                username: user.username || null, 
+                email: user.email 
+            }
         });
     } catch (error) {
         console.error('Login error:', error);
@@ -132,7 +140,7 @@ app.get('/api/auth/me', authenticateToken, (req, res) => {
     }
 });
 
-// ✅ NEW: Update user profile
+// Update user profile
 app.put('/api/auth/profile', authenticateToken, async (req, res) => {
     try {
         const { name, username, email, password } = req.body;
@@ -142,9 +150,9 @@ app.put('/api/auth/profile', authenticateToken, async (req, res) => {
             return res.status(400).json({ error: 'Name and email are required' });
         }
 
-        // Check if username is taken by another user
-        if (username) {
-            const existingUsername = userQueries.findByUsername ? userQueries.findByUsername.get(username) : null;
+        // Check if username is taken by another user (if username queries available)
+        if (username && userQueries.findByUsername) {
+            const existingUsername = userQueries.findByUsername.get(username);
             if (existingUsername && existingUsername.id !== userId) {
                 return res.status(409).json({ error: 'Username already taken' });
             }
@@ -156,20 +164,21 @@ app.put('/api/auth/profile', authenticateToken, async (req, res) => {
             return res.status(409).json({ error: 'Email already taken' });
         }
 
-        // Update user with or without password
+        // Update user (check if profile update queries are available)
         if (password) {
             const hashedPassword = await bcrypt.hash(password, 10);
             if (userQueries.updateWithPassword) {
                 userQueries.updateWithPassword.run(name, username || null, email, hashedPassword, userId);
             } else {
-                // Fallback if query doesn't exist
-                userQueries.update.run(name, email, userId);
+                // Fallback: just update basic info without username
+                return res.status(501).json({ error: 'Password update not supported yet. Please contact support.' });
             }
         } else {
             if (userQueries.updateProfile) {
                 userQueries.updateProfile.run(name, username || null, email, userId);
             } else {
-                userQueries.update.run(name, email, userId);
+                // Fallback: inform user
+                return res.status(501).json({ error: 'Profile update not fully supported yet. Please contact support.' });
             }
         }
 
@@ -280,7 +289,7 @@ app.get('/api/cards/me', authenticateToken, (req, res) => {
     }
 });
 
-// ✅ NEW: Clear all comments for user's card (when creating new card)
+// Clear all comments for user's card (when creating new card)
 app.delete('/api/cards/clear', authenticateToken, (req, res) => {
     try {
         const userId = req.user.userId;
@@ -346,11 +355,13 @@ app.post('/api/friends/request', authenticateToken, (req, res) => {
             return res.status(400).json({ error: 'Friend email or username required' });
         }
 
-        // Find friend by email or username
+        // Find friend by email or username (if username query available)
         let friend;
         if (friendUsername && userQueries.findByUsername) {
             friend = userQueries.findByUsername.get(friendUsername);
-        } else if (friendEmail) {
+        } 
+        
+        if (!friend && friendEmail) {
             friend = userQueries.findByEmail.get(friendEmail);
         }
 
