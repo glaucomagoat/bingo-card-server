@@ -4,7 +4,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
-const { initializeDatabase, userQueries, cardQueries, friendshipQueries, commentQueries, reactionQueries } = require('./database');
+const { initializeDatabase, userQueries, cardQueries, friendshipQueries, commentQueries, reactionQueries, groupQueries } = require('./database');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -665,6 +665,453 @@ app.get('/api/reactions/:commentId', authenticateToken, (req, res) => {
         res.json({ reactions: grouped });
     } catch (error) {
         console.error('Get reactions error:', error);
+        res.status(500).json({ error: 'Failed to get reactions' });
+    }
+});
+
+// ============= GROUP ROUTES =============
+
+// Create a group
+app.post('/api/groups', authenticateToken, (req, res) => {
+    try {
+        const { name } = req.body;
+
+        if (!name || name.trim() === '') {
+            return res.status(400).json({ error: 'Group name is required' });
+        }
+
+        // Create group
+        const result = groupQueries.create.run(name.trim(), req.user.userId);
+        const groupId = result.lastInsertRowid;
+
+        // Add creator as admin member
+        groupQueries.addMember.run(groupId, req.user.userId, 'admin', 'accepted');
+
+        res.status(201).json({ 
+            message: 'Group created successfully',
+            group: { id: groupId, name: name.trim() }
+        });
+    } catch (error) {
+        console.error('Create group error:', error);
+        res.status(500).json({ error: 'Failed to create group' });
+    }
+});
+
+// Get user's groups
+app.get('/api/groups', authenticateToken, (req, res) => {
+    try {
+        const groups = groupQueries.getUserGroups.all(req.user.userId);
+        res.json({ groups });
+    } catch (error) {
+        console.error('Get groups error:', error);
+        res.status(500).json({ error: 'Failed to get groups' });
+    }
+});
+
+// Get group details
+app.get('/api/groups/:groupId', authenticateToken, (req, res) => {
+    try {
+        const groupId = parseInt(req.params.groupId);
+        
+        // Check if user is a member
+        const membership = groupQueries.getMember.get(groupId, req.user.userId);
+        if (!membership || membership.status !== 'accepted') {
+            return res.status(403).json({ error: 'You are not a member of this group' });
+        }
+
+        const group = groupQueries.findById.get(groupId);
+        if (!group) {
+            return res.status(404).json({ error: 'Group not found' });
+        }
+
+        res.json({ group: { ...group, role: membership.role } });
+    } catch (error) {
+        console.error('Get group error:', error);
+        res.status(500).json({ error: 'Failed to get group' });
+    }
+});
+
+// Invite friend to group
+app.post('/api/groups/:groupId/invite', authenticateToken, (req, res) => {
+    try {
+        const groupId = parseInt(req.params.groupId);
+        const { friendId } = req.body;
+
+        if (!friendId) {
+            return res.status(400).json({ error: 'Friend ID is required' });
+        }
+
+        // Check if user is admin of group
+        const membership = groupQueries.getMember.get(groupId, req.user.userId);
+        if (!membership || membership.role !== 'admin') {
+            return res.status(403).json({ error: 'Only admins can invite members' });
+        }
+
+        // Check if friend exists
+        const friend = userQueries.findById.get(friendId);
+        if (!friend) {
+            return res.status(404).json({ error: 'Friend not found' });
+        }
+
+        // Check if already a member
+        const existingMember = groupQueries.getMember.get(groupId, friendId);
+        if (existingMember) {
+            if (existingMember.status === 'accepted') {
+                return res.status(409).json({ error: 'User is already a member' });
+            } else {
+                return res.status(409).json({ error: 'Invitation already sent' });
+            }
+        }
+
+        // Add as pending member
+        groupQueries.addMember.run(groupId, friendId, 'member', 'pending');
+
+        res.status(201).json({ message: 'Invitation sent successfully' });
+    } catch (error) {
+        console.error('Invite to group error:', error);
+        res.status(500).json({ error: 'Failed to send invitation' });
+    }
+});
+
+// Get pending group invitations
+app.get('/api/groups/invitations/pending', authenticateToken, (req, res) => {
+    try {
+        const invitations = groupQueries.getPendingInvitations.all(req.user.userId);
+        res.json({ invitations });
+    } catch (error) {
+        console.error('Get invitations error:', error);
+        res.status(500).json({ error: 'Failed to get invitations' });
+    }
+});
+
+// Accept group invitation
+app.post('/api/groups/invitations/:invitationId/accept', authenticateToken, (req, res) => {
+    try {
+        const invitationId = parseInt(req.params.invitationId);
+
+        // Get invitation
+        const invitation = groupQueries.getMemberById.get(invitationId);
+        if (!invitation) {
+            return res.status(404).json({ error: 'Invitation not found' });
+        }
+
+        // Verify it's for current user
+        if (invitation.user_id !== req.user.userId) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+
+        if (invitation.status === 'accepted') {
+            return res.status(400).json({ error: 'Invitation already accepted' });
+        }
+
+        // Accept invitation
+        groupQueries.updateMemberStatus.run('accepted', invitationId);
+
+        res.json({ message: 'Invitation accepted successfully' });
+    } catch (error) {
+        console.error('Accept invitation error:', error);
+        res.status(500).json({ error: 'Failed to accept invitation' });
+    }
+});
+
+// Decline group invitation
+app.delete('/api/groups/invitations/:invitationId', authenticateToken, (req, res) => {
+    try {
+        const invitationId = parseInt(req.params.invitationId);
+
+        // Get invitation
+        const invitation = groupQueries.getMemberById.get(invitationId);
+        if (!invitation) {
+            return res.status(404).json({ error: 'Invitation not found' });
+        }
+
+        // Verify it's for current user
+        if (invitation.user_id !== req.user.userId) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+
+        // Delete invitation
+        groupQueries.removeMember.run(invitation.group_id, req.user.userId);
+
+        res.json({ message: 'Invitation declined successfully' });
+    } catch (error) {
+        console.error('Decline invitation error:', error);
+        res.status(500).json({ error: 'Failed to decline invitation' });
+    }
+});
+
+// Get group members with leaderboard stats
+app.get('/api/groups/:groupId/members', authenticateToken, (req, res) => {
+    try {
+        const groupId = parseInt(req.params.groupId);
+
+        // Check if user is a member
+        const membership = groupQueries.getMember.get(groupId, req.user.userId);
+        if (!membership || membership.status !== 'accepted') {
+            return res.status(403).json({ error: 'You are not a member of this group' });
+        }
+
+        // Get all members
+        const members = groupQueries.getGroupMembers.all(groupId);
+
+        // Calculate stats for each member
+        const membersWithStats = members.map(member => {
+            const card = cardQueries.findByUserId.get(member.user_id);
+            
+            let completionPercentage = 0;
+            let bingoCount = 0;
+
+            if (card) {
+                const completed = JSON.parse(card.completed_data);
+                const grid = JSON.parse(card.grid_data);
+                const size = card.size;
+
+                // Calculate completion percentage
+                const totalCells = size * size;
+                const completedCells = completed.flat().filter(Boolean).length;
+                completionPercentage = Math.round((completedCells / totalCells) * 100);
+
+                // Calculate bingo count
+                // Check rows
+                for (let i = 0; i < size; i++) {
+                    if (completed[i].every(Boolean)) bingoCount++;
+                }
+                // Check columns
+                for (let j = 0; j < size; j++) {
+                    if (completed.every(row => row[j])) bingoCount++;
+                }
+                // Check diagonals
+                if (completed.every((row, i) => row[i])) bingoCount++;
+                if (completed.every((row, i) => row[size - 1 - i])) bingoCount++;
+            }
+
+            return {
+                id: member.user_id,
+                name: member.user_name,
+                email: member.user_email,
+                role: member.role,
+                completionPercentage,
+                bingoCount,
+                joinedAt: member.joined_at
+            };
+        });
+
+        // Sort by completion percentage (highest first), then by bingo count
+        membersWithStats.sort((a, b) => {
+            if (b.completionPercentage !== a.completionPercentage) {
+                return b.completionPercentage - a.completionPercentage;
+            }
+            return b.bingoCount - a.bingoCount;
+        });
+
+        res.json({ members: membersWithStats });
+    } catch (error) {
+        console.error('Get group members error:', error);
+        res.status(500).json({ error: 'Failed to get group members' });
+    }
+});
+
+// Leave group
+app.delete('/api/groups/:groupId/leave', authenticateToken, (req, res) => {
+    try {
+        const groupId = parseInt(req.params.groupId);
+
+        // Check if user is a member
+        const membership = groupQueries.getMember.get(groupId, req.user.userId);
+        if (!membership) {
+            return res.status(404).json({ error: 'You are not a member of this group' });
+        }
+
+        // Check if user is the last admin
+        const group = groupQueries.findById.get(groupId);
+        if (membership.role === 'admin') {
+            const members = groupQueries.getGroupMembers.all(groupId);
+            const adminCount = members.filter(m => m.role === 'admin').length;
+            
+            if (adminCount === 1 && members.length > 1) {
+                return res.status(400).json({ error: 'Cannot leave: you are the only admin. Transfer admin role first or delete the group.' });
+            }
+        }
+
+        // Remove member
+        groupQueries.removeMember.run(groupId, req.user.userId);
+
+        // If no members left, delete the group
+        const remainingMembers = groupQueries.getGroupMembers.all(groupId);
+        if (remainingMembers.length === 0) {
+            groupQueries.delete.run(groupId);
+        }
+
+        res.json({ message: 'Left group successfully' });
+    } catch (error) {
+        console.error('Leave group error:', error);
+        res.status(500).json({ error: 'Failed to leave group' });
+    }
+});
+
+// Delete group (admin only)
+app.delete('/api/groups/:groupId', authenticateToken, (req, res) => {
+    try {
+        const groupId = parseInt(req.params.groupId);
+
+        // Check if user is admin
+        const membership = groupQueries.getMember.get(groupId, req.user.userId);
+        if (!membership || membership.role !== 'admin') {
+            return res.status(403).json({ error: 'Only admins can delete groups' });
+        }
+
+        groupQueries.delete.run(groupId);
+
+        res.json({ message: 'Group deleted successfully' });
+    } catch (error) {
+        console.error('Delete group error:', error);
+        res.status(500).json({ error: 'Failed to delete group' });
+    }
+});
+
+// ============= GROUP COMMENT ROUTES =============
+
+// Post a group comment
+app.post('/api/groups/:groupId/comments', authenticateToken, (req, res) => {
+    try {
+        const groupId = parseInt(req.params.groupId);
+        const { text } = req.body;
+
+        if (!text || text.trim() === '') {
+            return res.status(400).json({ error: 'Comment text is required' });
+        }
+
+        // Check if user is a member
+        const membership = groupQueries.getMember.get(groupId, req.user.userId);
+        if (!membership || membership.status !== 'accepted') {
+            return res.status(403).json({ error: 'You are not a member of this group' });
+        }
+
+        // Create comment
+        const result = groupQueries.createComment.run(groupId, req.user.userId, text.trim());
+
+        res.status(201).json({ 
+            message: 'Comment posted successfully',
+            commentId: result.lastInsertRowid
+        });
+    } catch (error) {
+        console.error('Create group comment error:', error);
+        res.status(500).json({ error: 'Failed to post comment' });
+    }
+});
+
+// Get group comments
+app.get('/api/groups/:groupId/comments', authenticateToken, (req, res) => {
+    try {
+        const groupId = parseInt(req.params.groupId);
+
+        // Check if user is a member
+        const membership = groupQueries.getMember.get(groupId, req.user.userId);
+        if (!membership || membership.status !== 'accepted') {
+            return res.status(403).json({ error: 'You are not a member of this group' });
+        }
+
+        const comments = groupQueries.getComments.all(groupId);
+
+        res.json({ comments });
+    } catch (error) {
+        console.error('Get group comments error:', error);
+        res.status(500).json({ error: 'Failed to get comments' });
+    }
+});
+
+// Delete group comment
+app.delete('/api/groups/:groupId/comments/:commentId', authenticateToken, (req, res) => {
+    try {
+        const commentId = parseInt(req.params.commentId);
+
+        const result = groupQueries.deleteComment.run(commentId, req.user.userId);
+
+        if (result.changes === 0) {
+            return res.status(404).json({ error: 'Comment not found or unauthorized' });
+        }
+
+        res.json({ message: 'Comment deleted successfully' });
+    } catch (error) {
+        console.error('Delete group comment error:', error);
+        res.status(500).json({ error: 'Failed to delete comment' });
+    }
+});
+
+// Add reaction to group comment
+app.post('/api/groups/:groupId/comments/:commentId/reactions', authenticateToken, (req, res) => {
+    try {
+        const groupId = parseInt(req.params.groupId);
+        const commentId = parseInt(req.params.commentId);
+        const { emoji } = req.body;
+
+        if (!emoji) {
+            return res.status(400).json({ error: 'Emoji is required' });
+        }
+
+        // Check if user is a member
+        const membership = groupQueries.getMember.get(groupId, req.user.userId);
+        if (!membership || membership.status !== 'accepted') {
+            return res.status(403).json({ error: 'You are not a member of this group' });
+        }
+
+        // Add reaction
+        try {
+            groupQueries.createCommentReaction.run(commentId, req.user.userId, emoji);
+            res.status(201).json({ message: 'Reaction added successfully' });
+        } catch (error) {
+            if (error.message.includes('UNIQUE constraint')) {
+                return res.status(409).json({ error: 'You already reacted with this emoji' });
+            }
+            throw error;
+        }
+    } catch (error) {
+        console.error('Add group comment reaction error:', error);
+        res.status(500).json({ error: 'Failed to add reaction' });
+    }
+});
+
+// Remove reaction from group comment
+app.delete('/api/groups/:groupId/comments/:commentId/reactions', authenticateToken, (req, res) => {
+    try {
+        const commentId = parseInt(req.params.commentId);
+        const { emoji } = req.body;
+
+        if (!emoji) {
+            return res.status(400).json({ error: 'Emoji is required' });
+        }
+
+        const result = groupQueries.deleteCommentReaction.run(commentId, req.user.userId, emoji);
+
+        if (result.changes === 0) {
+            return res.status(404).json({ error: 'Reaction not found' });
+        }
+
+        res.json({ message: 'Reaction removed successfully' });
+    } catch (error) {
+        console.error('Remove group comment reaction error:', error);
+        res.status(500).json({ error: 'Failed to remove reaction' });
+    }
+});
+
+// Get reactions for group comment
+app.get('/api/groups/:groupId/comments/:commentId/reactions', authenticateToken, (req, res) => {
+    try {
+        const commentId = parseInt(req.params.commentId);
+        const reactions = groupQueries.getCommentReactions.all(commentId);
+
+        // Group by emoji
+        const grouped = {};
+        reactions.forEach(reaction => {
+            if (!grouped[reaction.emoji]) {
+                grouped[reaction.emoji] = [];
+            }
+            grouped[reaction.emoji].push(reaction.user_name);
+        });
+
+        res.json({ reactions: grouped });
+    } catch (error) {
+        console.error('Get group comment reactions error:', error);
         res.status(500).json({ error: 'Failed to get reactions' });
     }
 });

@@ -118,6 +118,63 @@ function initializeDatabase() {
         `);
         console.log('✅ Reactions table created/verified');
 
+        // Groups table
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                creator_id INTEGER NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (creator_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        `);
+        console.log('✅ Groups table created/verified');
+
+        // Group members table
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS group_members (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                role TEXT NOT NULL CHECK(role IN ('admin', 'member')),
+                status TEXT NOT NULL CHECK(status IN ('pending', 'accepted')) DEFAULT 'pending',
+                joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                UNIQUE(group_id, user_id)
+            )
+        `);
+        console.log('✅ Group members table created/verified');
+
+        // Group comments table
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS group_comments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        `);
+        console.log('✅ Group comments table created/verified');
+
+        // Group comment reactions table
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS group_comment_reactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_comment_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                emoji TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (group_comment_id) REFERENCES group_comments(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                UNIQUE(group_comment_id, user_id, emoji)
+            )
+        `);
+        console.log('✅ Group comment reactions table created/verified');
+
         // Verify tables exist
         const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
         console.log('📋 Tables in database:', tables.map(t => t.name).join(', '));
@@ -264,6 +321,66 @@ const reactionQueries = {
 };
 console.log('✅ Reaction queries prepared');
 
+// Group queries
+const groupQueries = {
+    create: db.prepare('INSERT INTO groups (name, creator_id) VALUES (?, ?)'),
+    findById: db.prepare('SELECT * FROM groups WHERE id = ?'),
+    getUserGroups: db.prepare(`
+        SELECT g.*, gm.role, gm.status
+        FROM groups g
+        JOIN group_members gm ON g.id = gm.group_id
+        WHERE gm.user_id = ? AND gm.status = 'accepted'
+        ORDER BY g.created_at DESC
+    `),
+    delete: db.prepare('DELETE FROM groups WHERE id = ?'),
+    
+    // Group members
+    addMember: db.prepare('INSERT INTO group_members (group_id, user_id, role, status) VALUES (?, ?, ?, ?)'),
+    updateMemberStatus: db.prepare('UPDATE group_members SET status = ? WHERE id = ?'),
+    getMember: db.prepare('SELECT * FROM group_members WHERE group_id = ? AND user_id = ?'),
+    getMemberById: db.prepare('SELECT * FROM group_members WHERE id = ?'),
+    getGroupMembers: db.prepare(`
+        SELECT gm.*, u.name as user_name, u.email as user_email
+        FROM group_members gm
+        JOIN users u ON gm.user_id = u.id
+        WHERE gm.group_id = ? AND gm.status = 'accepted'
+        ORDER BY gm.joined_at ASC
+    `),
+    getPendingInvitations: db.prepare(`
+        SELECT gm.id, gm.group_id, g.name as group_name, 
+               u.name as invited_by_name, gm.joined_at as invited_at
+        FROM group_members gm
+        JOIN groups g ON gm.group_id = g.id
+        JOIN users u ON g.creator_id = u.id
+        WHERE gm.user_id = ? AND gm.status = 'pending'
+        ORDER BY gm.joined_at DESC
+    `),
+    removeMember: db.prepare('DELETE FROM group_members WHERE group_id = ? AND user_id = ?'),
+    
+    // Group comments
+    createComment: db.prepare('INSERT INTO group_comments (group_id, user_id, text) VALUES (?, ?, ?)'),
+    getComments: db.prepare(`
+        SELECT gc.*, u.name as user_name
+        FROM group_comments gc
+        JOIN users u ON gc.user_id = u.id
+        WHERE gc.group_id = ?
+        ORDER BY gc.created_at DESC
+    `),
+    deleteComment: db.prepare('DELETE FROM group_comments WHERE id = ? AND user_id = ?'),
+    
+    // Group comment reactions
+    createCommentReaction: db.prepare('INSERT INTO group_comment_reactions (group_comment_id, user_id, emoji) VALUES (?, ?, ?)'),
+    deleteCommentReaction: db.prepare('DELETE FROM group_comment_reactions WHERE group_comment_id = ? AND user_id = ? AND emoji = ?'),
+    getCommentReactions: db.prepare(`
+        SELECT gcr.*, u.name as user_name
+        FROM group_comment_reactions gcr
+        JOIN users u ON gcr.user_id = u.id
+        WHERE gcr.group_comment_id = ?
+        ORDER BY gcr.created_at ASC
+    `)
+};
+console.log('✅ Group queries prepared');
+
 console.log('🎉 Database module loaded successfully');
 
 module.exports = {
@@ -273,5 +390,6 @@ module.exports = {
     cardQueries,
     friendshipQueries,
     commentQueries,
-    reactionQueries
+    reactionQueries,
+    groupQueries
 };
