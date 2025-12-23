@@ -4,7 +4,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
-const { initializeDatabase, userQueries, cardQueries, friendshipQueries, commentQueries, reactionQueries, groupQueries } = require('./database');
+const { initializeDatabase, userQueries, cardQueries, friendshipQueries, commentQueries, reactionQueries, groupQueries, adminQueries } = require('./database');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -117,7 +117,8 @@ app.post('/api/auth/login', async (req, res) => {
                 id: user.id, 
                 name: user.name, 
                 username: user.username || null, 
-                email: user.email 
+                email: user.email,
+                is_admin: user.is_admin || 0
             }
         });
     } catch (error) {
@@ -1113,6 +1114,132 @@ app.get('/api/groups/:groupId/comments/:commentId/reactions', authenticateToken,
     } catch (error) {
         console.error('Get group comment reactions error:', error);
         res.status(500).json({ error: 'Failed to get reactions' });
+    }
+});
+
+// ============= ADMIN ROUTES =============
+
+// Admin authentication middleware
+function authenticateAdmin(req, res, next) {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (!token) {
+        return res.status(401).json({ error: 'Access token required' });
+    }
+
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (err) {
+            return res.status(403).json({ error: 'Invalid or expired token' });
+        }
+        
+        // Check if user is admin
+        const adminCheck = adminQueries.isAdmin.get(user.userId);
+        if (!adminCheck || !adminCheck.is_admin) {
+            return res.status(403).json({ error: 'Admin access required' });
+        }
+        
+        req.user = user;
+        next();
+    });
+}
+
+// Get admin dashboard analytics
+app.get('/api/admin/analytics', authenticateAdmin, (req, res) => {
+    try {
+        const totalUsers = adminQueries.getTotalUsers.get();
+        const totalCards = adminQueries.getTotalCards.get();
+        const totalGroups = adminQueries.getTotalGroups.get();
+        const totalComments = adminQueries.getTotalComments.get();
+        const totalGroupComments = adminQueries.getTotalGroupComments.get();
+        const recentUsers = adminQueries.getRecentUsers.all(10);
+        
+        res.json({
+            analytics: {
+                totalUsers: totalUsers.count,
+                totalCards: totalCards.count,
+                totalGroups: totalGroups.count,
+                totalComments: totalComments.count + totalGroupComments.count,
+                recentUsers
+            }
+        });
+    } catch (error) {
+        console.error('Get analytics error:', error);
+        res.status(500).json({ error: 'Failed to get analytics' });
+    }
+});
+
+// Get all users (admin only)
+app.get('/api/admin/users', authenticateAdmin, (req, res) => {
+    try {
+        const users = adminQueries.getAllUsers.all();
+        
+        // Filter out admins from the list
+        const regularUsers = users.filter(u => !u.is_admin);
+        
+        res.json({ users: regularUsers });
+    } catch (error) {
+        console.error('Get all users error:', error);
+        res.status(500).json({ error: 'Failed to get users' });
+    }
+});
+
+// Get specific user details including their bingo card (admin only)
+app.get('/api/admin/users/:userId', authenticateAdmin, (req, res) => {
+    try {
+        const userId = parseInt(req.params.userId);
+        
+        // Get user details
+        const user = adminQueries.getUserById.get(userId);
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        // Get user's bingo card
+        let card = null;
+        try {
+            const cardData = cardQueries.findByUserId.get(userId);
+            if (cardData) {
+                card = {
+                    size: cardData.size,
+                    grid: JSON.parse(cardData.grid_data),
+                    completed: JSON.parse(cardData.completed_data),
+                    createdAt: cardData.created_at,
+                    updatedAt: cardData.updated_at
+                };
+            }
+        } catch (error) {
+            console.error('Error loading user card:', error);
+        }
+        
+        // Get user's groups
+        let groups = [];
+        try {
+            groups = groupQueries.getUserGroups.all(userId);
+        } catch (error) {
+            console.error('Error loading user groups:', error);
+        }
+        
+        // Get user's friends count
+        let friendsCount = 0;
+        try {
+            const friends = friendshipQueries.getFriends.all(userId, userId, userId, userId);
+            friendsCount = friends.length;
+        } catch (error) {
+            console.error('Error loading user friends:', error);
+        }
+        
+        res.json({
+            user: {
+                ...user,
+                card,
+                groups,
+                friendsCount
+            }
+        });
+    } catch (error) {
+        console.error('Get user details error:', error);
+        res.status(500).json({ error: 'Failed to get user details' });
     }
 });
 

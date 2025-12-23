@@ -2,21 +2,54 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 
-console.log('📁 Current directory:', __dirname);
-console.log('📁 Database will be created at:', path.join(__dirname, 'bingo.db'));
+// ============= PERSISTENT STORAGE FIX =============
+// Use Railway Volume for persistent storage across deployments
+// This prevents data loss when the container restarts
+const isProduction = process.env.NODE_ENV === 'production' || process.env.RAILWAY_ENVIRONMENT;
+
+// Database path
+let dbPath;
+let dbDir;
+
+if (isProduction) {
+    // Production: Use Railway Volume at /app/data
+    dbDir = '/app/data';
+    dbPath = path.join(dbDir, 'database.sqlite');
+    console.log('🚀 Production mode: Using persistent volume');
+} else {
+    // Development: Use local directory
+    dbDir = __dirname;
+    dbPath = path.join(__dirname, 'database.sqlite');
+    console.log('💻 Development mode: Using local storage');
+}
+
+console.log('📁 Database directory:', dbDir);
+console.log('📁 Database path:', dbPath);
+
+// Ensure data directory exists
+try {
+    if (!fs.existsSync(dbDir)) {
+        fs.mkdirSync(dbDir, { recursive: true });
+        console.log('✅ Created database directory');
+    }
+} catch (err) {
+    console.error('❌ Failed to create directory:', err.message);
+}
 
 // Ensure directory is writable
 try {
-    fs.accessSync(__dirname, fs.constants.W_OK);
+    fs.accessSync(dbDir, fs.constants.W_OK);
     console.log('✅ Directory is writable');
 } catch (err) {
     console.error('❌ Directory is not writable:', err.message);
+    console.error('⚠️  Database may not persist across deployments!');
 }
 
 // Create database connection
-const db = new Database(path.join(__dirname, 'bingo.db'), { verbose: console.log });
+const db = new Database(dbPath, { verbose: console.log });
 
 console.log('✅ Database connection established');
+console.log('💾 Data will persist across deployments!');
 
 // Enable foreign keys
 db.pragma('foreign_keys = ON');
@@ -54,6 +87,21 @@ function initializeDatabase() {
         } catch (error) {
             console.error('⚠️  Error checking/adding username column:', error.message);
             // Don't crash - continue without username column
+        }
+
+        // Add is_admin column if it doesn't exist
+        try {
+            const columns = db.pragma('table_info(users)');
+            const hasIsAdmin = columns.some(col => col.name === 'is_admin');
+            
+            if (!hasIsAdmin) {
+                db.exec(`ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0`);
+                console.log('✅ is_admin column added to users table');
+            } else {
+                console.log('ℹ️  is_admin column already exists');
+            }
+        } catch (error) {
+            console.error('⚠️  Error checking/adding is_admin column:', error.message);
         }
 
         // Bingo cards table
@@ -199,24 +247,32 @@ console.log('🔧 Creating prepared statements...');
 
 // Check if username column exists for prepared statements
 let hasUsernameColumn = false;
+let hasIsAdminColumn = false;
 try {
     const columns = db.pragma('table_info(users)');
     hasUsernameColumn = columns.some(col => col.name === 'username');
+    hasIsAdminColumn = columns.some(col => col.name === 'is_admin');
     console.log('ℹ️  Username column available:', hasUsernameColumn);
+    console.log('ℹ️  is_admin column available:', hasIsAdminColumn);
 } catch (error) {
-    console.error('⚠️  Could not check username column:', error.message);
+    console.error('⚠️  Could not check columns:', error.message);
 }
 
-// User queries - create based on whether username column exists
+// Build SELECT fields based on available columns
+let userSelectFields = 'id, name, email, created_at';
+if (hasUsernameColumn) userSelectFields = 'id, name, username, email, created_at';
+if (hasIsAdminColumn) {
+    userSelectFields = hasUsernameColumn 
+        ? 'id, name, username, email, is_admin, created_at'
+        : 'id, name, email, is_admin, created_at';
+}
+
+// User queries - create based on available columns
 const userQueries = {
     create: db.prepare('INSERT INTO users (name, email, password) VALUES (?, ?, ?)'),
     findByEmail: db.prepare('SELECT * FROM users WHERE email = ?'),
-    findById: hasUsernameColumn 
-        ? db.prepare('SELECT id, name, username, email, created_at FROM users WHERE id = ?')
-        : db.prepare('SELECT id, name, email, created_at FROM users WHERE id = ?'),
-    getAll: hasUsernameColumn
-        ? db.prepare('SELECT id, name, username, email, created_at FROM users')
-        : db.prepare('SELECT id, name, email, created_at FROM users'),
+    findById: db.prepare(`SELECT ${userSelectFields} FROM users WHERE id = ?`),
+    getAll: db.prepare(`SELECT ${userSelectFields} FROM users`),
     searchByEmail: hasUsernameColumn
         ? db.prepare('SELECT id, name, username, email FROM users WHERE email LIKE ? LIMIT 10')
         : db.prepare('SELECT id, name, email FROM users WHERE email LIKE ? LIMIT 10')
@@ -381,6 +437,53 @@ const groupQueries = {
 };
 console.log('✅ Group queries prepared');
 
+// Admin queries
+const adminQueries = {
+    // Get all users with their details
+    getAllUsers: db.prepare(`
+        SELECT 
+            u.id, 
+            u.name, 
+            u.username, 
+            u.email, 
+            u.is_admin,
+            u.created_at,
+            (SELECT COUNT(*) FROM bingo_cards WHERE user_id = u.id) as has_card
+        FROM users u
+        ORDER BY u.created_at DESC
+    `),
+    
+    // Get user by ID with full details
+    getUserById: db.prepare(`
+        SELECT id, name, username, email, is_admin, created_at
+        FROM users
+        WHERE id = ?
+    `),
+    
+    // Get analytics
+    getTotalUsers: db.prepare('SELECT COUNT(*) as count FROM users WHERE is_admin = 0'),
+    getTotalCards: db.prepare('SELECT COUNT(*) as count FROM bingo_cards'),
+    getTotalGroups: db.prepare('SELECT COUNT(*) as count FROM groups'),
+    getTotalComments: db.prepare('SELECT COUNT(*) as count FROM comments'),
+    getTotalGroupComments: db.prepare('SELECT COUNT(*) as count FROM group_comments'),
+    
+    // Get recent activity
+    getRecentUsers: db.prepare(`
+        SELECT id, name, username, email, created_at
+        FROM users
+        WHERE is_admin = 0
+        ORDER BY created_at DESC
+        LIMIT ?
+    `),
+    
+    // Set admin status
+    setAdminStatus: db.prepare('UPDATE users SET is_admin = ? WHERE id = ?'),
+    
+    // Check if user is admin
+    isAdmin: db.prepare('SELECT is_admin FROM users WHERE id = ?')
+};
+console.log('✅ Admin queries prepared');
+
 console.log('🎉 Database module loaded successfully');
 
 module.exports = {
@@ -391,5 +494,6 @@ module.exports = {
     friendshipQueries,
     commentQueries,
     reactionQueries,
-    groupQueries
+    groupQueries,
+    adminQueries
 };
