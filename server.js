@@ -1243,6 +1243,82 @@ app.get('/api/admin/users/:userId', authenticateAdmin, (req, res) => {
     }
 });
 
+// ============= TEMPORARY ADMIN CREATION =============
+// ⚠️ REMOVE THIS AFTER MAKING YOURSELF ADMIN! ⚠️
+// This endpoint is ONLY for initial setup - it's a security risk!
+
+app.get('/api/temp-make-admin/:email', (req, res) => {
+    try {
+        const email = req.params.email.toLowerCase().trim();
+        
+        console.log('🔐 Temporary admin creation request for:', email);
+        
+        // Check if user exists
+        const user = userQueries.findByEmail.get(email);
+        if (!user) {
+            console.log('❌ User not found:', email);
+            return res.status(404).json({ 
+                error: 'User not found',
+                message: `No user with email: ${email}`,
+                hint: 'Make sure you created an account on the website first!'
+            });
+        }
+        
+        console.log('✅ User found:', user.id, user.email);
+        
+        // Check if already admin
+        if (user.is_admin === 1) {
+            console.log('ℹ️  User is already admin');
+            return res.json({
+                success: true,
+                message: 'User is already admin!',
+                user: {
+                    id: user.id,
+                    email: user.email,
+                    name: user.name,
+                    is_admin: user.is_admin
+                }
+            });
+        }
+        
+        // Make user admin
+        const { db } = require('./database');
+        const result = db.prepare('UPDATE users SET is_admin = 1 WHERE email = ?').run(email);
+        
+        console.log('🎉 Admin status updated, rows affected:', result.changes);
+        
+        // Verify update
+        const updatedUser = userQueries.findByEmail.get(email);
+        
+        console.log('✅ Verification - is_admin:', updatedUser.is_admin);
+        
+        res.json({ 
+            success: true,
+            message: '🎉 User is now admin!',
+            user: {
+                id: updatedUser.id,
+                email: updatedUser.email,
+                name: updatedUser.name,
+                is_admin: updatedUser.is_admin
+            },
+            warning: '⚠️ REMOVE THIS ENDPOINT FROM server.js IMMEDIATELY AFTER USE!',
+            nextSteps: [
+                '1. Test admin login on your website',
+                '2. Delete this endpoint from server.js (lines with temp-make-admin)',
+                '3. Deploy again without this endpoint',
+                '4. You will remain admin permanently!'
+            ]
+        });
+    } catch (error) {
+        console.error('❌ Make admin error:', error);
+        res.status(500).json({ 
+            error: 'Failed to make admin',
+            message: error.message,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
+    }
+});
+
 // ============= HEALTH CHECK =============
 
 app.get('/api/health', (req, res) => {
