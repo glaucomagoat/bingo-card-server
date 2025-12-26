@@ -172,11 +172,40 @@ function initializeDatabase() {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 creator_id INTEGER NOT NULL,
+                description TEXT DEFAULT '',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (creator_id) REFERENCES users(id) ON DELETE CASCADE
             )
         `);
         console.log('✅ Groups table created/verified');
+
+        // Add description column if it doesn't exist
+        try {
+            const columns = db.prepare('PRAGMA table_info(groups)').all();
+            const hasDescription = columns.some(col => col.name === 'description');
+            
+            if (!hasDescription) {
+                db.exec(`ALTER TABLE groups ADD COLUMN description TEXT DEFAULT ''`);
+                console.log('✅ description column added to groups table');
+            } else {
+                console.log('ℹ️  description column already exists');
+            }
+        } catch (error) {
+            console.error('⚠️  Error checking/adding description column:', error.message);
+        }
+
+        // Create hidden_recent_users table for feature #3
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS hidden_recent_users (
+                user_id INTEGER NOT NULL,
+                hidden_user_id INTEGER NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, hidden_user_id),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (hidden_user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        `);
+        console.log('✅ Hidden recent users table created/verified');
 
         // Group members table
         db.exec(`
@@ -381,6 +410,7 @@ console.log('✅ Reaction queries prepared');
 const groupQueries = {
     create: db.prepare('INSERT INTO groups (name, creator_id) VALUES (?, ?)'),
     findById: db.prepare('SELECT * FROM groups WHERE id = ?'),
+    updateDescription: db.prepare('UPDATE groups SET description = ? WHERE id = ?'),
     getUserGroups: db.prepare(`
         SELECT g.*, gm.role, gm.status
         FROM groups g
@@ -437,6 +467,15 @@ const groupQueries = {
 };
 console.log('✅ Group queries prepared');
 
+// Hidden recent users queries
+const hiddenUsersQueries = {
+    hide: db.prepare('INSERT OR IGNORE INTO hidden_recent_users (user_id, hidden_user_id) VALUES (?, ?)'),
+    unhide: db.prepare('DELETE FROM hidden_recent_users WHERE user_id = ? AND hidden_user_id = ?'),
+    isHidden: db.prepare('SELECT 1 FROM hidden_recent_users WHERE user_id = ? AND hidden_user_id = ?'),
+    getHiddenUsers: db.prepare('SELECT hidden_user_id FROM hidden_recent_users WHERE user_id = ?')
+};
+console.log('✅ Hidden users queries prepared');
+
 // Admin queries
 const adminQueries = {
     // Get all users with their details
@@ -476,6 +515,27 @@ const adminQueries = {
         LIMIT ?
     `),
     
+    // Get recent users excluding hidden ones and existing friends
+    getRecentUsersFiltered: db.prepare(`
+        SELECT id, name, username, email, created_at
+        FROM users
+        WHERE is_admin = 0
+        AND id != ?
+        AND id NOT IN (
+            SELECT hidden_user_id FROM hidden_recent_users WHERE user_id = ?
+        )
+        AND id NOT IN (
+            SELECT CASE 
+                WHEN user1_id = ? THEN user2_id
+                ELSE user1_id
+            END
+            FROM friendships
+            WHERE (user1_id = ? OR user2_id = ?)
+        )
+        ORDER BY created_at DESC
+        LIMIT ?
+    `),
+    
     // Set admin status
     setAdminStatus: db.prepare('UPDATE users SET is_admin = ? WHERE id = ?'),
     
@@ -495,5 +555,6 @@ module.exports = {
     commentQueries,
     reactionQueries,
     groupQueries,
+    hiddenUsersQueries,
     adminQueries
 };

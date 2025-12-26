@@ -4,11 +4,76 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
-const { initializeDatabase, userQueries, cardQueries, friendshipQueries, commentQueries, reactionQueries, groupQueries, adminQueries } = require('./database');
+const { initializeDatabase, userQueries, cardQueries, friendshipQueries, commentQueries, reactionQueries, groupQueries, hiddenUsersQueries, adminQueries } = require('./database');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-this-in-production';
+
+// Helper function to calculate bingo stats
+function calculateBingoStats(card) {
+    if (!card) {
+        return { tilesCompleted: 0, bingosAchieved: 0, lastTileDate: null };
+    }
+
+    const completed = JSON.parse(card.completed_data);
+    const size = card.size;
+    
+    // Count completed tiles
+    let tilesCompleted = 0;
+    let lastTileDate = null;
+    
+    for (let row = 0; row < size; row++) {
+        for (let col = 0; col < size; col++) {
+            if (completed[row] && completed[row][col]) {
+                tilesCompleted++;
+                const tileDate = completed[row][col].completedAt;
+                if (tileDate && (!lastTileDate || new Date(tileDate) > new Date(lastTileDate))) {
+                    lastTileDate = tileDate;
+                }
+            }
+        }
+    }
+    
+    // Count bingos
+    let bingosAchieved = 0;
+    
+    // Check rows
+    for (let row = 0; row < size; row++) {
+        let complete = true;
+        for (let col = 0; col < size; col++) {
+            if (!completed[row] || !completed[row][col]) {
+                complete = false;
+                break;
+            }
+        }
+        if (complete) bingosAchieved++;
+    }
+    
+    // Check columns
+    for (let col = 0; col < size; col++) {
+        let complete = true;
+        for (let row = 0; row < size; row++) {
+            if (!completed[row] || !completed[row][col]) {
+                complete = false;
+                break;
+            }
+        }
+        if (complete) bingosAchieved++;
+    }
+    
+    // Check diagonals
+    let diag1Complete = true;
+    let diag2Complete = true;
+    for (let i = 0; i < size; i++) {
+        if (!completed[i] || !completed[i][i]) diag1Complete = false;
+        if (!completed[i] || !completed[i][size - 1 - i]) diag2Complete = false;
+    }
+    if (diag1Complete) bingosAchieved++;
+    if (diag2Complete) bingosAchieved++;
+    
+    return { tilesCompleted, bingosAchieved, lastTileDate };
+}
 
 // Middleware
 app.use(cors());
@@ -440,7 +505,23 @@ app.get('/api/friends', authenticateToken, (req, res) => {
         const friends = friendshipQueries.getFriends.all(
             req.user.userId, req.user.userId, req.user.userId, req.user.userId
         );
-        res.json({ friends });
+        
+        // Add bingo stats for each friend
+        const friendsWithStats = friends.map(friend => {
+            const card = cardQueries.findByUserId.get(friend.friend_id);
+            const stats = calculateBingoStats(card);
+            return {
+                ...friend,
+                tilesCompleted: stats.tilesCompleted,
+                bingosAchieved: stats.bingosAchieved,
+                lastTileDate: stats.lastTileDate
+            };
+        });
+        
+        // Sort alphabetically by friend_name
+        friendsWithStats.sort((a, b) => a.friend_name.localeCompare(b.friend_name));
+        
+        res.json({ friends: friendsWithStats });
     } catch (error) {
         console.error('Get friends error:', error);
         res.status(500).json({ error: 'Failed to get friends' });
@@ -467,6 +548,27 @@ app.delete('/api/friends/:friendshipId', authenticateToken, (req, res) => {
     } catch (error) {
         console.error('Delete friendship error:', error);
         res.status(500).json({ error: 'Failed to delete friendship' });
+    }
+});
+
+// ============= HIDDEN RECENT USERS ROUTES =============
+
+// Hide a user from recent suggestions
+app.post('/api/users/hide/:userId', authenticateToken, (req, res) => {
+    try {
+        const userIdToHide = parseInt(req.params.userId);
+
+        if (userIdToHide === req.user.userId) {
+            return res.status(400).json({ error: 'Cannot hide yourself' });
+        }
+
+        const { hiddenUsersQueries } = require('./database');
+        hiddenUsersQueries.hide.run(req.user.userId, userIdToHide);
+
+        res.json({ message: 'User hidden from suggestions' });
+    } catch (error) {
+        console.error('Hide user error:', error);
+        res.status(500).json({ error: 'Failed to hide user' });
     }
 });
 
@@ -732,6 +834,32 @@ app.get('/api/groups/:groupId', authenticateToken, (req, res) => {
     }
 });
 
+// Update group description (admin only)
+app.put('/api/groups/:groupId/description', authenticateToken, (req, res) => {
+    try {
+        const groupId = parseInt(req.params.groupId);
+        const { description } = req.body;
+
+        if (description === undefined) {
+            return res.status(400).json({ error: 'Description is required' });
+        }
+
+        // Check if user is admin of group
+        const membership = groupQueries.getMember.get(groupId, req.user.userId);
+        if (!membership || membership.role !== 'admin') {
+            return res.status(403).json({ error: 'Only admins can update group description' });
+        }
+
+        // Update description
+        groupQueries.updateDescription.run(description.trim(), groupId);
+
+        res.json({ message: 'Group description updated successfully' });
+    } catch (error) {
+        console.error('Update group description error:', error);
+        res.status(500).json({ error: 'Failed to update group description' });
+    }
+});
+
 // Invite friend to group
 app.post('/api/groups/:groupId/invite', authenticateToken, (req, res) => {
     try {
@@ -858,32 +986,14 @@ app.get('/api/groups/:groupId/members', authenticateToken, (req, res) => {
         // Calculate stats for each member
         const membersWithStats = members.map(member => {
             const card = cardQueries.findByUserId.get(member.user_id);
+            const stats = calculateBingoStats(card);
             
             let completionPercentage = 0;
-            let bingoCount = 0;
 
             if (card) {
-                const completed = JSON.parse(card.completed_data);
-                const grid = JSON.parse(card.grid_data);
                 const size = card.size;
-
-                // Calculate completion percentage
                 const totalCells = size * size;
-                const completedCells = completed.flat().filter(Boolean).length;
-                completionPercentage = Math.round((completedCells / totalCells) * 100);
-
-                // Calculate bingo count
-                // Check rows
-                for (let i = 0; i < size; i++) {
-                    if (completed[i].every(Boolean)) bingoCount++;
-                }
-                // Check columns
-                for (let j = 0; j < size; j++) {
-                    if (completed.every(row => row[j])) bingoCount++;
-                }
-                // Check diagonals
-                if (completed.every((row, i) => row[i])) bingoCount++;
-                if (completed.every((row, i) => row[size - 1 - i])) bingoCount++;
+                completionPercentage = Math.round((stats.tilesCompleted / totalCells) * 100);
             }
 
             return {
@@ -892,7 +1002,9 @@ app.get('/api/groups/:groupId/members', authenticateToken, (req, res) => {
                 email: member.user_email,
                 role: member.role,
                 completionPercentage,
-                bingoCount,
+                bingoCount: stats.bingosAchieved,
+                tilesCompleted: stats.tilesCompleted,
+                lastTileDate: stats.lastTileDate,
                 joinedAt: member.joined_at
             };
         });
