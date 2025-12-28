@@ -572,6 +572,20 @@ app.post('/api/users/hide/:userId', authenticateToken, (req, res) => {
     }
 });
 
+// Get list of hidden user IDs for current user
+app.get('/api/users/hidden', authenticateToken, (req, res) => {
+    try {
+        const { hiddenUsersQueries } = require('./database');
+        const hiddenUsers = hiddenUsersQueries.getHiddenUsers.all(req.user.userId);
+        const hiddenUserIds = hiddenUsers.map(row => row.hidden_user_id);
+        
+        res.json({ hiddenUserIds });
+    } catch (error) {
+        console.error('Get hidden users error:', error);
+        res.status(500).json({ error: 'Failed to get hidden users' });
+    }
+});
+
 // ============= COMMENT ROUTES =============
 
 // Create a comment
